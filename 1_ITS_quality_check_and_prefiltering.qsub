@@ -1,0 +1,63 @@
+#!/bin/bash -login
+
+#################################
+#  **Bioinformatic pipeline**   #
+#  **ITS amplicon sequences**   #
+#   **GLBRC - swithcgrass**     # 
+#     Gian MN Benucci, PhD      #
+#       benucci@msu.edu         #
+#################################
+
+# 							Before you start!
+# - Make sure your *R1.fastq.gz and *R2.fastq.gz reads
+#   are in a forlder named raw_ITS
+# - Make sure you have an indexed Phix genome by putting
+#   the folder "phix_index" in your home$ directory
+
+#PBS -q main
+#PBS -l walltime=01:00:00,nodes=1:ppn=4,mem=8gb
+#PBS -j oe
+#PBS -A colej
+
+module load FastQC/0.11.3
+module load bowtie2/2.2.6
+
+cd ${PBS_O_WORKDIR}
+
+mkdir stats
+mkdir no_phix
+mkdir re_sync
+
+cd raw_ITS
+for fastq in *.fastq.gz
+do gunzip -c "$fastq" | paste - - - - | wc -l && echo $fastq 
+done > ../stats/reads_raw.counts
+
+cat *R1_001.fastq.gz > raw_reads_R1.fastq.gz; cat *R2_001.fastq.gz > raw_reads_R2.fastq.gz
+echo "Total read count : `gunzip -c raw_reads_R1.fastq.gz | grep -c "^+$"`" >> ../stats/reads_raw.counts 
+fastqc ./raw_reads_R1.fastq.gz raw_reads_R2.fastq.gz -o ../stats/ && rm -rf raw_reads_R1.fastq.gz raw_reads_R2.fastq.gz
+
+ls *.fastq.gz > fastq_raw.list
+
+while read R1
+do read R2
+bowtie2 -x /mnt/home/benucci/phix_index/my_phix -U $R1 -t -p 20 --un ../no_phix/$R1.nophix.fastq -S ../no_phix/$R1.contaminated_align.sam 2> ../no_phix/$R1.nophix.log
+bowtie2 -x /mnt/home/benucci/phix_index/my_phix -U $R2 -t -p 20 --un ../no_phix/$R2.nophix.fastq -S ../no_phix/$R2.contaminated_align.sam 2> ../no_phix/$R2.nophix.log
+done < fastq_raw.list
+
+for fastq in ../no_phix/*.nophix.fastq
+do echo "$fastq : `grep -c "^+$" $fastq`"
+done > ../stats/reads_no_phix.counts
+
+cd ../no_phix/
+ls *gz.nophix.fastq > fastq_no_phix.list
+while read R1
+do read R2
+python ../fastqCombinePairedEnd.py $R1 $R2
+done < fastq_no_phix.list
+
+mv *pairs*.fastq ../re_sync/
+cd ../re_sync/
+for fastq in *.fastq
+do echo "$fastq : `grep -c "^+$" $fastq`"
+done > ../stats/reads_re_sync.counts
